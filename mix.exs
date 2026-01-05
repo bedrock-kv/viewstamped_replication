@@ -4,7 +4,7 @@ defmodule Bedrockviewstamped_replication.MixProject do
   def project do
     [
       app: :bedrock_viewstamped_replication,
-      version: "0.2.2",
+      version: "0.2.3",
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
