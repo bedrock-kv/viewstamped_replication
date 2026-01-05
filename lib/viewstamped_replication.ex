@@ -38,10 +38,10 @@ defmodule Bedrock.ViewstampedReplication do
 
   alias Bedrock.ViewstampedReplication, as: VR
   alias VR.ClientTable
-  alias VR.Log
   alias VR.Mode.Normal
   alias VR.Mode.Recovering
   alias VR.Mode.ViewChange
+  alias VR.StateStore
 
   import VR.Telemetry,
     only: [
@@ -87,7 +87,7 @@ defmodule Bedrock.ViewstampedReplication do
 
   - `me` - The identifier for this replica
   - `configuration` - A sorted list of all replica identifiers (must include `me`)
-  - `log` - The log implementation to use
+  - `store` - The StateStore implementation to use
   - `interface` - The module implementing the Interface behavior
 
   ## Returns
@@ -99,10 +99,10 @@ defmodule Bedrock.ViewstampedReplication do
   @spec new(
           me :: replica_id(),
           configuration :: [replica_id()],
-          log :: Log.t(),
+          store :: StateStore.t(),
           interface :: module()
         ) :: t()
-  def new(me, configuration, log, interface) do
+  def new(me, configuration, store, interface) do
     # Configuration must be sorted for deterministic primary selection
     sorted_config = Enum.sort(configuration)
 
@@ -117,7 +117,7 @@ defmodule Bedrock.ViewstampedReplication do
     quorum = calculate_quorum(length(sorted_config))
 
     # Restore view number from persistent storage
-    view_number = Log.current_view_number(log)
+    view_number = StateStore.get_view_number(store)
 
     %__MODULE__{
       me: me,
@@ -126,14 +126,14 @@ defmodule Bedrock.ViewstampedReplication do
       quorum: quorum,
       interface: interface
     }
-    |> become_normal(view_number, 0, 0, log, nil)
+    |> become_normal(view_number, 0, 0, store, nil)
   end
 
   @doc """
-  Return the log for this protocol instance.
+  Return the state store for this protocol instance.
   """
-  @spec log(t()) :: Log.t()
-  def log(t), do: t.mode.log
+  @spec store(t()) :: StateStore.t()
+  def store(t), do: t.mode.store
 
   @doc """
   Return the replica identifier for this instance.
@@ -295,13 +295,13 @@ defmodule Bedrock.ViewstampedReplication do
   # DOVIEWCHANGE message (only processed by new primary during view change)
   def handle_event(
         %{mode: %ViewChange{} = mode} = t,
-        {:do_view_change, view_num, log_entries, last_normal_view, op_num, commit_num},
+        {:do_view_change, view_num, state_data, last_normal_view, op_num, commit_num},
         from
       ) do
     mode
     |> ViewChange.do_view_change_received(
       view_num,
-      log_entries,
+      state_data,
       last_normal_view,
       op_num,
       commit_num,
@@ -313,11 +313,11 @@ defmodule Bedrock.ViewstampedReplication do
   # STARTVIEW message from new primary
   def handle_event(
         %{mode: %mode{}} = t,
-        {:start_view, view_num, log_entries, op_num, commit_num},
+        {:start_view, view_num, state_data, op_num, commit_num},
         _from
       )
       when mode in [Normal, ViewChange] do
-    mode.start_view_received(t.mode, view_num, log_entries, op_num, commit_num)
+    mode.start_view_received(t.mode, view_num, state_data, op_num, commit_num)
     |> handle_mode_result(t)
   end
 
@@ -335,14 +335,14 @@ defmodule Bedrock.ViewstampedReplication do
   # RECOVERYRESPONSE message
   def handle_event(
         %{mode: %Recovering{} = mode} = t,
-        {:recovery_response, view_num, nonce, log_entries, op_num, commit_num, is_primary},
+        {:recovery_response, view_num, nonce, state_data, op_num, commit_num, is_primary},
         from
       ) do
     mode
     |> Recovering.recovery_response_received(
       view_num,
       nonce,
-      log_entries,
+      state_data,
       op_num,
       commit_num,
       is_primary,
@@ -362,14 +362,14 @@ defmodule Bedrock.ViewstampedReplication do
     |> handle_mode_result(t)
   end
 
-  # NEWSTATE message - primary responding with state transfer (Section 5.2)
+  # NEWSTATE message - replica responding with state transfer (Section 5.2)
   def handle_event(
         %{mode: %Normal{} = mode} = t,
-        {:new_state, view_num, log_entries, op_num, commit_num},
+        {:new_state, view_num, state_data, op_num, commit_num},
         from
       ) do
     mode
-    |> Normal.new_state_received(view_num, log_entries, op_num, commit_num, from)
+    |> Normal.new_state_received(view_num, state_data, op_num, commit_num, from)
     |> handle_mode_result(t)
   end
 
@@ -389,33 +389,33 @@ defmodule Bedrock.ViewstampedReplication do
   defp handle_mode_result({:start_view_change, new_view_num}, t),
     do: start_view_change(t, new_view_num)
 
-  defp handle_mode_result({:become_normal, view_num, op_num, commit_num, log}, t),
-    do: become_normal(t, view_num, op_num, commit_num, log, nil)
+  defp handle_mode_result({:become_normal, view_num, op_num, commit_num, new_store}, t),
+    do: become_normal(t, view_num, op_num, commit_num, new_store, nil)
 
   # With client_table preservation (Paper Section 4.2 Step 5)
-  defp handle_mode_result({:become_normal, view_num, op_num, commit_num, log, client_table}, t),
-    do: become_normal(t, view_num, op_num, commit_num, log, client_table)
+  defp handle_mode_result({:become_normal, view_num, op_num, commit_num, new_store, client_table}, t),
+    do: become_normal(t, view_num, op_num, commit_num, new_store, client_table)
 
-  defp handle_mode_result({:become_primary, view_num, op_num, commit_num, log}, t),
-    do: become_normal(t, view_num, op_num, commit_num, log, nil)
+  defp handle_mode_result({:become_primary, view_num, op_num, commit_num, new_store}, t),
+    do: become_normal(t, view_num, op_num, commit_num, new_store, nil)
 
   # With client_table preservation (Paper Section 4.2 Step 4)
-  defp handle_mode_result({:become_primary, view_num, op_num, commit_num, log, client_table}, t),
-    do: become_normal(t, view_num, op_num, commit_num, log, client_table)
+  defp handle_mode_result({:become_primary, view_num, op_num, commit_num, new_store, client_table}, t),
+    do: become_normal(t, view_num, op_num, commit_num, new_store, client_table)
 
   # State transitions
-  defp become_normal(t, view_num, op_num, commit_num, log, client_table) do
+  defp become_normal(t, view_num, op_num, commit_num, new_store, client_table) do
     is_primary = t.replica_index == primary_index(view_num, length(t.configuration))
 
     track_became_normal(view_num, is_primary, t.me)
 
     # Persist view number if it changed
-    updated_log =
-      if view_num > Log.current_view_number(log) do
-        {:ok, new_log} = Log.save_current_view_number(log, view_num)
-        new_log
+    updated_store =
+      if view_num > StateStore.get_view_number(new_store) do
+        {:ok, saved_store} = StateStore.save_view_number(new_store, view_num)
+        saved_store
       else
-        log
+        new_store
       end
 
     mode =
@@ -423,7 +423,7 @@ defmodule Bedrock.ViewstampedReplication do
         view_num,
         op_num,
         commit_num,
-        updated_log,
+        updated_store,
         t.configuration,
         t.replica_index,
         t.quorum,
@@ -458,7 +458,7 @@ defmodule Bedrock.ViewstampedReplication do
     track_started_view_change(new_view_num, t.me)
 
     # Persist the new view number
-    {:ok, updated_log} = Log.save_current_view_number(log(t), new_view_num)
+    {:ok, updated_store} = StateStore.save_view_number(store(t), new_view_num)
 
     mode =
       ViewChange.new(
@@ -466,7 +466,7 @@ defmodule Bedrock.ViewstampedReplication do
         last_normal_view,
         op_number(t),
         commit_number(t),
-        updated_log,
+        updated_store,
         client_table,
         t.configuration,
         t.replica_index,
@@ -488,7 +488,7 @@ defmodule Bedrock.ViewstampedReplication do
     mode =
       Recovering.new(
         nonce,
-        log(t),
+        store(t),
         t.configuration,
         t.replica_index,
         t.quorum,

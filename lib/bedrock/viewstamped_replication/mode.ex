@@ -2,6 +2,7 @@ defmodule Bedrock.ViewstampedReplication.Mode do
   @moduledoc false
 
   alias Bedrock.ViewstampedReplication, as: VR
+  alias VR.StateStore
 
   @doc """
   Called when a timer fires.
@@ -10,7 +11,8 @@ defmodule Bedrock.ViewstampedReplication.Mode do
               {:ok, any()}
               | :start_view_change
               | {:start_view_change, VR.view_number()}
-              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(), VR.Log.t()}
+              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(),
+                 StateStore.t()}
 
   @doc """
   Called when this replica (as primary) receives a client request.
@@ -72,9 +74,10 @@ defmodule Bedrock.ViewstampedReplication.Mode do
               from :: VR.replica_id()
             ) ::
               {:ok, any()}
-              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(), VR.Log.t()}
+              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(),
+                 StateStore.t(), VR.ClientTable.t()}
               | {:become_primary, VR.view_number(), VR.op_number(), VR.commit_number(),
-                 VR.Log.t()}
+                 StateStore.t(), VR.ClientTable.t()}
 
   @doc """
   Called when a STARTVIEW message is received from the new primary.
@@ -87,7 +90,10 @@ defmodule Bedrock.ViewstampedReplication.Mode do
               VR.commit_number()
             ) ::
               {:ok, any()}
-              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(), VR.Log.t()}
+              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(),
+                 StateStore.t()}
+              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(),
+                 StateStore.t(), VR.ClientTable.t()}
 
   @doc """
   Called when a RECOVERY message is received.
@@ -109,7 +115,8 @@ defmodule Bedrock.ViewstampedReplication.Mode do
               from :: VR.replica_id()
             ) ::
               {:ok, any()}
-              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(), VR.Log.t()}
+              | {:become_normal, VR.view_number(), VR.op_number(), VR.commit_number(),
+                 StateStore.t()}
 
   @doc """
   Called when a GETSTATE message is received requesting state transfer.

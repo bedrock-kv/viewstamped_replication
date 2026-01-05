@@ -11,8 +11,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
 
   alias Bedrock.ViewstampedReplication, as: VR
   alias VR.ClientTable
-  alias VR.Log
   alias VR.Mode.Normal.BackupTracking
+  alias VR.StateStore
 
   @behaviour VR.Mode
 
@@ -20,7 +20,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
           view_number: VR.view_number(),
           op_number: VR.op_number(),
           commit_number: VR.commit_number(),
-          log: Log.t(),
+          store: StateStore.t(),
           client_table: ClientTable.t(),
           configuration: [VR.replica_id()],
           replica_index: non_neg_integer(),
@@ -41,7 +41,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     view_number
     op_number
     commit_number
-    log
+    store
     client_table
     configuration
     replica_index
@@ -65,7 +65,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
           VR.view_number(),
           VR.op_number(),
           VR.commit_number(),
-          Log.t(),
+          StateStore.t(),
           [VR.replica_id()],
           non_neg_integer(),
           VR.quorum(),
@@ -78,7 +78,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
         view_number,
         op_number,
         commit_number,
-        log,
+        store,
         configuration,
         replica_index,
         quorum,
@@ -121,10 +121,10 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     # We need to find which operations are committed but not yet executed.
     # An operation is executed if it has a completed entry in the client table.
     # Primary sends replies to clients; backups do not.
-    {final_log, final_client_table} =
+    {final_store, final_client_table} =
       if commit_number > 0 do
         execute_pending_committed_operations(
-          log,
+          store,
           actual_client_table,
           commit_number,
           view_number,
@@ -132,7 +132,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
           is_primary
         )
       else
-        {log, actual_client_table}
+        {store, actual_client_table}
       end
 
     # Cache commonly accessed values (viewstamped_replication-73q, viewstamped_replication-mnw)
@@ -143,7 +143,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
       view_number: view_number,
       op_number: op_number,
       commit_number: commit_number,
-      log: final_log,
+      store: final_store,
       client_table: final_client_table,
       configuration: configuration,
       replica_index: replica_index,
@@ -196,11 +196,11 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
   def request_received(mode, client_id, request_num, operation) do
     case ClientTable.check_request(mode.client_table, client_id, request_num) do
       :new ->
-        # Assign new op number and add to log
+        # Assign new op number and add to store
         new_op_number = mode.op_number + 1
 
         entry = {client_id, request_num, operation}
-        {:ok, new_log} = Log.append(mode.log, new_op_number, entry)
+        {:ok, new_store} = StateStore.record_pending(mode.store, new_op_number, entry)
 
         # Update client table to track pending request
         new_client_table = ClientTable.record_pending(mode.client_table, client_id, request_num)
@@ -211,7 +211,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
         new_mode = %{
           mode
           | op_number: new_op_number,
-            log: new_log,
+            store: new_store,
             client_table: new_client_table
         }
 
@@ -266,7 +266,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     # Check if we can append (no gap)
     if op_num == mode.op_number + 1 do
       entry = {client_id, request_num, operation}
-      {:ok, new_log} = Log.append(mode.log, op_num, entry)
+      {:ok, new_store} = StateStore.record_pending(mode.store, op_num, entry)
 
       # Per paper Section 4.1 Step 4:
       # "updates the client's information in the client-table"
@@ -274,11 +274,10 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
       updated_client_table = ClientTable.record_pending(mode.client_table, client_id, request_num)
 
       # Execute any newly committed operations
-      {executed_log, new_client_table} =
+      {executed_store, new_client_table} =
         execute_committed_operations(
-          new_log,
+          new_store,
           updated_client_table,
-          mode.commit_number,
           commit_num,
           mode.interface
         )
@@ -293,14 +292,14 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
         mode
         | op_number: op_num,
           commit_number: max(mode.commit_number, commit_num),
-          log: executed_log,
+          store: executed_store,
           client_table: new_client_table,
           last_heard_at: last_heard_at
       }
 
       {:ok, new_mode}
     else
-      # Gap in log - request state transfer per Section 4.1 Step 4
+      # Gap in store - request state transfer per Section 4.1 Step 4
       # "it waits until it has entries in its log for all earlier requests
       # (doing state transfer if necessary to get the missing information)"
       primary = Enum.at(mode.configuration, primary_index(mode.view_number, mode.num_replicas))
@@ -329,11 +328,10 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     new_mode =
       if ack_count + 1 >= mode.quorum and op_num > mode.commit_number do
         # Commit operations from commit_number+1 to op_num
-        {executed_log, new_client_table} =
+        {executed_store, new_client_table} =
           execute_and_reply(
-            mode.log,
+            mode.store,
             mode.client_table,
-            mode.commit_number,
             op_num,
             mode.view_number,
             mode.interface
@@ -342,7 +340,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
         %{
           mode
           | commit_number: op_num,
-            log: executed_log,
+            store: executed_store,
             client_table: new_client_table,
             backup_tracking: new_tracking
         }
@@ -369,11 +367,10 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     last_heard_at = mode.interface.timestamp_in_ms()
 
     if commit_num > mode.commit_number do
-      {executed_log, new_client_table} =
+      {executed_store, new_client_table} =
         execute_committed_operations(
-          mode.log,
+          mode.store,
           mode.client_table,
-          mode.commit_number,
           commit_num,
           mode.interface
         )
@@ -382,7 +379,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
        %{
          mode
          | commit_number: commit_num,
-           log: executed_log,
+           store: executed_store,
            client_table: new_client_table,
            last_heard_at: last_heard_at
        }}
@@ -417,13 +414,21 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
       when view_num <= mode.view_number,
       do: {:ok, mode}
 
-  def start_view_received(mode, view_num, log_entries, op_num, commit_num) do
-    new_log =
-      mode.log
-      |> Log.truncate_after(0)
-      |> Log.append_entries(log_entries)
+  def start_view_received(mode, view_num, state_data, op_num, commit_num) do
+    # Apply state - handles both incremental (log entries) and full (snapshot) transfers
+    new_store =
+      case state_data do
+        {:full, snapshot} ->
+          StateStore.apply_state(mode.store, snapshot)
 
-    {:become_normal, view_num, op_num, commit_num, new_log}
+        entries when is_list(entries) ->
+          # Replace existing state with log entries from new primary
+          mode.store
+          |> StateStore.apply_state([])
+          |> StateStore.apply_mutations(entries)
+      end
+
+    {:become_normal, view_num, op_num, commit_num, new_store}
   end
 
   @impl VR.Mode
@@ -434,9 +439,9 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     # is the commit-number; otherwise these values are nil."
     is_primary = mode.is_primary
 
-    {log_entries, op_num, commit_num} =
+    {state_data, op_num, commit_num} =
       if is_primary do
-        {Log.entries_from(mode.log, 1), mode.op_number, mode.commit_number}
+        {StateStore.get_state_from(mode.store, 1), mode.op_number, mode.commit_number}
       else
         {nil, nil, nil}
       end
@@ -445,7 +450,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
       :recovery_response,
       mode.view_number,
       nonce,
-      log_entries,
+      state_data,
       op_num,
       commit_num,
       is_primary
@@ -485,13 +490,13 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
   # Note: ANY normal replica can respond, not just primary. This allows
   # faster state transfer by distributing load across all replicas.
   def get_state_received(mode, _view_num, from_op_num, from) do
-    # Respond with log entries from requested op number onwards
-    log_entries = Log.entries_from(mode.log, from_op_num)
+    # Respond with state from requested op number onwards
+    state_data = StateStore.get_state_from(mode.store, from_op_num)
 
     mode.interface.send_event(from, {
       :new_state,
       mode.view_number,
-      log_entries,
+      state_data,
       mode.op_number,
       mode.commit_number
     })
@@ -500,13 +505,13 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
   end
 
   @impl VR.Mode
-  def new_state_received(mode, view_num, log_entries, op_num, commit_num, from)
+  def new_state_received(mode, view_num, state_data, op_num, commit_num, from)
 
-  def new_state_received(mode, view_num, _log_entries, _op_num, _commit_num, _from)
+  def new_state_received(mode, view_num, _state_data, _op_num, _commit_num, _from)
       when view_num < mode.view_number,
       do: {:ok, mode}
 
-  def new_state_received(mode, view_num, _log_entries, _op_num, _commit_num, _from)
+  def new_state_received(mode, view_num, _state_data, _op_num, _commit_num, _from)
       when view_num > mode.view_number,
       do: {:start_view_change, view_num}
 
@@ -514,14 +519,14 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
   def new_state_received(
         %{is_primary: true} = mode,
         _view_num,
-        _log_entries,
+        _state_data,
         _op_num,
         _commit_num,
         _from
       ),
       do: {:ok, mode}
 
-  def new_state_received(mode, _view_num, log_entries, op_num, commit_num, _from) do
+  def new_state_received(mode, _view_num, state_data, op_num, commit_num, _from) do
     # Per VR paper Section 4.2 (viewstamped_replication-6to): Update last_heard_at instead of restarting timer
     last_heard_at = mode.interface.timestamp_in_ms()
 
@@ -529,21 +534,30 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     # The paper's algorithm replaces the log, which can lose committed entries
     # if the backup has entries the primary doesn't send. We MERGE instead,
     # preserving existing entries. See: viewstamped_replication-k2g, normal_test.exs:577
-    new_log = Log.append_entries(mode.log, log_entries)
+    new_store =
+      case state_data do
+        {:full, snapshot} ->
+          StateStore.apply_state(mode.store, snapshot)
+
+        {:incremental, entries} ->
+          StateStore.apply_mutations(mode.store, entries)
+
+        entries when is_list(entries) ->
+          StateStore.apply_mutations(mode.store, entries)
+      end
 
     # Execute newly committed operations
-    {executed_log, new_client_table} =
+    {executed_store, new_client_table} =
       execute_committed_operations(
-        new_log,
+        new_store,
         mode.client_table,
-        mode.commit_number,
         commit_num,
         mode.interface
       )
 
     new_mode = %{
       mode
-      | log: executed_log,
+      | store: executed_store,
         op_number: max(mode.op_number, op_num),
         commit_number: max(mode.commit_number, commit_num),
         client_table: new_client_table,
@@ -582,73 +596,88 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     end)
   end
 
-  defp execute_committed_operations(log, client_table, old_commit, new_commit, interface) do
-    if new_commit > old_commit do
-      Enum.reduce((old_commit + 1)..new_commit, {log, client_table}, fn op_num, acc ->
-        execute_single_operation(acc, Log.get(log, op_num), op_num, interface)
-      end)
-    else
-      {log, client_table}
+  # Execute committed operations (for backups receiving PREPARE/COMMIT)
+  # Uses StateStore.commit_through which handles the execute callback
+  defp execute_committed_operations(store, client_table, target_commit, interface) do
+    execute_fn = fn {client_id, request_num, operation} ->
+      {:ok, result} = interface.execute_operation(operation)
+      {:ok, {client_id, request_num, operation, result}}
     end
-  end
 
-  defp execute_single_operation({l, ct}, {client_id, request_num, operation}, op_num, interface) do
-    {:ok, result} = interface.execute_operation(operation)
-    interface.operation_committed(l, op_num, operation, result)
-    {l, ClientTable.record_result(ct, client_id, request_num, result)}
-  end
+    {:ok, new_store, results} = StateStore.commit_through(store, target_commit, execute_fn)
 
-  defp execute_single_operation(acc, nil, _op_num, _interface), do: acc
-
-  defp execute_and_reply(log, client_table, old_commit, new_commit, view_number, interface) do
-    if new_commit > old_commit do
-      Enum.reduce((old_commit + 1)..new_commit, {log, client_table}, fn op_num, acc ->
-        execute_and_reply_single(acc, Log.get(log, op_num), op_num, view_number, interface)
+    # Process results: update client table and notify interface
+    new_client_table =
+      Enum.reduce(results, client_table, fn {op_num, {client_id, request_num, operation, result}},
+                                            ct ->
+        interface.operation_committed(new_store, op_num, operation, result)
+        ClientTable.record_result(ct, client_id, request_num, result)
       end)
-    else
-      {log, client_table}
+
+    {new_store, new_client_table}
+  end
+
+  # Execute and reply (for primary when quorum is reached)
+  # Same as execute_committed_operations but also sends replies to clients
+  defp execute_and_reply(store, client_table, target_commit, view_number, interface) do
+    execute_fn = fn {client_id, request_num, operation} ->
+      {:ok, result} = interface.execute_operation(operation)
+      {:ok, {client_id, request_num, operation, result}}
     end
-  end
 
-  defp execute_and_reply_single({l, ct}, {client_id, request_num, op}, op_num, view, interface) do
-    {:ok, result} = interface.execute_operation(op)
-    interface.operation_committed(l, op_num, op, result)
-    interface.send_reply(client_id, view, request_num, result)
-    {l, ClientTable.record_result(ct, client_id, request_num, result)}
-  end
+    {:ok, new_store, results} = StateStore.commit_through(store, target_commit, execute_fn)
 
-  defp execute_and_reply_single(acc, nil, _op_num, _view, _interface), do: acc
+    # Process results: update client table, notify interface, and send replies
+    new_client_table =
+      Enum.reduce(results, client_table, fn {op_num, {client_id, request_num, operation, result}},
+                                            ct ->
+        interface.operation_committed(new_store, op_num, operation, result)
+        interface.send_reply(client_id, view_number, request_num, result)
+        ClientTable.record_result(ct, client_id, request_num, result)
+      end)
+
+    {new_store, new_client_table}
+  end
 
   # Per paper Section 4.2 Steps 4 & 5:
   # Execute any committed operations that haven't been executed yet.
   # This is called when replicas transition to normal mode after a view change.
   # Primary sends replies to clients; backups do not.
-  defp execute_pending_committed_operations(log, ct, commit, view, interface, send_replies) do
-    if commit > 0 do
-      Enum.reduce(1..commit, {log, ct}, fn op_num, acc ->
-        execute_pending_single(acc, Log.get(log, op_num), op_num, view, interface, send_replies)
+  # Only executes operations not already in client_table (skips already-executed).
+  defp execute_pending_committed_operations(store, ct, commit, view, interface, send_replies) do
+    execute_fn = fn {client_id, request_num, operation} ->
+      # Check if already executed (in client_table)
+      case ClientTable.check_request(ct, client_id, request_num) do
+        {:cached, result} ->
+          # Already executed, return cached result
+          {:ok, {:skip, client_id, request_num, result}}
+
+        _ ->
+          # Execute the operation
+          {:ok, result} = interface.execute_operation(operation)
+          {:ok, {:execute, client_id, request_num, operation, result}}
+      end
+    end
+
+    {:ok, new_store, results} = StateStore.commit_through(store, commit, execute_fn)
+
+    # Process results, skipping already-executed operations
+    new_client_table =
+      Enum.reduce(results, ct, fn {op_num, result_tuple}, acc_ct ->
+        process_pending_result(new_store, acc_ct, op_num, result_tuple, view, interface, send_replies)
       end)
-    else
-      {log, ct}
-    end
+
+    {new_store, new_client_table}
   end
 
-  defp execute_pending_single({l, ct}, {client_id, req_num, op}, op_num, view, iface, send?) do
-    case ClientTable.check_request(ct, client_id, req_num) do
-      {:cached, _result} ->
-        {l, ct}
-
-      _ ->
-        execute_pending_operation({l, ct}, {client_id, req_num, op}, op_num, view, iface, send?)
-    end
+  defp process_pending_result(_store, ct, _op_num, {:skip, _client_id, _req_num, _result}, _view, _iface, _send?) do
+    # Already executed, client_table already has this entry
+    ct
   end
 
-  defp execute_pending_single(acc, nil, _op_num, _view, _iface, _send?), do: acc
-
-  defp execute_pending_operation({l, ct}, {client_id, req_num, op}, op_num, view, iface, send?) do
-    {:ok, result} = iface.execute_operation(op)
-    iface.operation_committed(l, op_num, op, result)
+  defp process_pending_result(store, ct, op_num, {:execute, client_id, req_num, operation, result}, view, iface, send?) do
+    iface.operation_committed(store, op_num, operation, result)
     if send?, do: iface.send_reply(client_id, view, req_num, result)
-    {l, ClientTable.record_result(ct, client_id, req_num, result)}
+    ClientTable.record_result(ct, client_id, req_num, result)
   end
 end

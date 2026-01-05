@@ -51,15 +51,13 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal.BackupTracking do
   Get the highest op_number that at least `count` replicas have acknowledged.
   """
   @spec highest_acked_by_count(t(), non_neg_integer()) :: VR.op_number()
+  def highest_acked_by_count(%__MODULE__{acks: acks}, count) when map_size(acks) < count, do: 0
+
   def highest_acked_by_count(%__MODULE__{acks: acks}, count) do
-    if map_size(acks) < count do
-      0
-    else
-      acks
-      |> Map.values()
-      |> Enum.sort(:desc)
-      |> Enum.at(count - 1, 0)
-    end
+    acks
+    |> Map.values()
+    |> Enum.sort(:desc)
+    |> Enum.at(count - 1, 0)
   end
 
   @doc """

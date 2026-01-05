@@ -2,8 +2,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.RecoveringTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
-  alias Bedrock.ViewstampedReplication.Log.InMemoryLog
   alias Bedrock.ViewstampedReplication.Mode.Recovering
+  alias Bedrock.ViewstampedReplication.StateStore.InMemoryLog
 
   import Mox
 

@@ -14,13 +14,13 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
 
   alias Bedrock.ViewstampedReplication, as: VR
   alias VR.ClientTable
-  alias VR.Log
+  alias VR.StateStore
 
   @behaviour VR.Mode
 
   @type do_view_change_msg :: %{
           view_number: VR.view_number(),
-          log_entries: list(),
+          state_data: term(),
           last_normal_view: VR.view_number(),
           op_number: VR.op_number(),
           commit_number: VR.commit_number(),
@@ -32,7 +32,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
           last_normal_view: VR.view_number(),
           op_number: VR.op_number(),
           commit_number: VR.commit_number(),
-          log: Log.t(),
+          store: StateStore.t(),
           client_table: ClientTable.t(),
           configuration: [VR.replica_id()],
           replica_index: non_neg_integer(),
@@ -53,7 +53,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
     last_normal_view
     op_number
     commit_number
-    log
+    store
     client_table
     configuration
     replica_index
@@ -76,7 +76,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
           VR.view_number(),
           VR.op_number(),
           VR.commit_number(),
-          Log.t(),
+          StateStore.t(),
           ClientTable.t(),
           [VR.replica_id()],
           non_neg_integer(),
@@ -89,7 +89,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
         last_normal_view,
         op_number,
         commit_number,
-        log,
+        store,
         client_table,
         configuration,
         replica_index,
@@ -108,7 +108,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
       last_normal_view: last_normal_view,
       op_number: op_number,
       commit_number: commit_number,
-      log: log,
+      store: store,
       client_table: client_table,
       configuration: configuration,
       replica_index: replica_index,
@@ -183,7 +183,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
   def do_view_change_received(
         mode,
         view_num,
-        log_entries,
+        state_data,
         last_normal_view,
         op_num,
         commit_num,
@@ -193,7 +193,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
   def do_view_change_received(
         mode,
         view_num,
-        _log_entries,
+        _state_data,
         _last_normal_view,
         _op_num,
         _commit_num,
@@ -205,7 +205,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
   def do_view_change_received(
         %{am_new_primary: false} = mode,
         _view_num,
-        _log_entries,
+        _state_data,
         _last_normal_view,
         _op_num,
         _commit_num,
@@ -216,14 +216,14 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
   def do_view_change_received(
         mode,
         _view_num,
-        log_entries,
+        state_data,
         last_normal_view,
         op_num,
         commit_num,
         from
       ) do
     msg = %{
-      log_entries: log_entries,
+      state_data: state_data,
       last_normal_view: last_normal_view,
       op_number: op_num,
       commit_number: commit_num,
@@ -242,35 +242,39 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
 
     # Check if we have quorum (f+1) DOVIEWCHANGE messages
     if map_size(new_messages) >= mode.quorum do
-      {best_uncommitted_entries, best_op_num, max_commit_num} =
-        select_best_log(Map.values(new_messages))
+      {best_uncommitted_data, best_op_num, max_commit_num} =
+        select_best_state(Map.values(new_messages))
 
       # Keep committed prefix, adopt best uncommitted suffix
-      truncated_log = Log.truncate_after(mode.log, mode.commit_number)
-      new_log = Log.append_entries(truncated_log, best_uncommitted_entries)
+      # Reset state and apply uncommitted entries
+      new_store =
+        mode.store
+        |> StateStore.apply_state([])
+        |> apply_state_data(best_uncommitted_data)
 
-      full_log_entries = Log.entries_from(new_log, 1)
-      send_start_view_to_all(new_mode, full_log_entries, best_op_num, max_commit_num)
+      full_state_data = StateStore.get_state_from(new_store, 1)
+      send_start_view_to_all(new_mode, full_state_data, best_op_num, max_commit_num)
 
       # Paper Section 4.2 Step 4: preserve client_table across view change
-      {:become_primary, mode.view_number, best_op_num, max_commit_num, new_log, mode.client_table}
+      {:become_primary, mode.view_number, best_op_num, max_commit_num, new_store, mode.client_table}
     else
       {:ok, new_mode}
     end
   end
 
   @impl VR.Mode
-  def start_view_received(mode, view_num, log_entries, op_num, commit_num)
+  def start_view_received(mode, view_num, state_data, op_num, commit_num)
 
-  def start_view_received(mode, view_num, _log_entries, _op_num, _commit_num)
+  def start_view_received(mode, view_num, _state_data, _op_num, _commit_num)
       when view_num < mode.view_number,
       do: {:ok, mode}
 
-  def start_view_received(mode, view_num, log_entries, op_num, commit_num) do
-    new_log =
-      mode.log
-      |> Log.truncate_after(0)
-      |> Log.append_entries(log_entries)
+  def start_view_received(mode, view_num, state_data, op_num, commit_num) do
+    # Apply state from new primary - handles both incremental and full transfers
+    new_store =
+      mode.store
+      |> StateStore.apply_state([])
+      |> apply_state_data(state_data)
 
     # Per paper Section 4.2 Step 5:
     # "If there are non-committed operations in the log, they send a
@@ -285,7 +289,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
     end
 
     # Paper Section 4.2 Step 5: preserve client_table across view change
-    {:become_normal, view_num, op_num, commit_num, new_log, mode.client_table}
+    {:become_normal, view_num, op_num, commit_num, new_store, mode.client_table}
   end
 
   @impl VR.Mode
@@ -311,7 +315,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
 
   @impl VR.Mode
   # Ignore during view change
-  def new_state_received(mode, _view_num, _log_entries, _op_num, _commit_num, _from),
+  def new_state_received(mode, _view_num, _state_data, _op_num, _commit_num, _from),
     do: {:ok, mode}
 
   # Private helpers
@@ -332,12 +336,12 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
     new_primary_index = rem(mode.view_number, mode.num_replicas)
     new_primary = Enum.at(mode.configuration, new_primary_index)
 
-    log_entries = Log.entries_from(mode.log, mode.commit_number + 1)
+    state_data = StateStore.get_state_from(mode.store, mode.commit_number + 1)
 
     mode.interface.send_event(new_primary, {
       :do_view_change,
       mode.view_number,
-      log_entries,
+      state_data,
       mode.last_normal_view,
       mode.op_number,
       mode.commit_number
@@ -345,7 +349,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
   end
 
   # Per paper Section 4.2 Step 3: STARTVIEW sent to "other replicas" (not self) (viewstamped_replication-nfk)
-  defp send_start_view_to_all(mode, log_entries, op_num, commit_num) do
+  defp send_start_view_to_all(mode, state_data, op_num, commit_num) do
     me = mode.me
 
     mode.configuration
@@ -353,19 +357,32 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
     |> Enum.each(fn replica ->
       mode.interface.send_event(
         replica,
-        {:start_view, mode.view_number, log_entries, op_num, commit_num}
+        {:start_view, mode.view_number, state_data, op_num, commit_num}
       )
     end)
   end
 
-  defp select_best_log(messages) do
-    # Select log with highest (last_normal_view, op_number)
+  defp select_best_state(messages) do
+    # Select state with highest (last_normal_view, op_number)
     best = Enum.max_by(messages, fn msg -> {msg.last_normal_view, msg.op_number} end)
 
     # Use max commit_number from all messages
     max_commit = Enum.max_by(messages, & &1.commit_number).commit_number
 
-    {best.log_entries, best.op_number, max_commit}
+    {best.state_data, best.op_number, max_commit}
+  end
+
+  # Apply state data - handles both incremental and full transfers
+  defp apply_state_data(store, {:full, snapshot}) do
+    StateStore.apply_state(store, snapshot)
+  end
+
+  defp apply_state_data(store, {:incremental, entries}) do
+    StateStore.apply_mutations(store, entries)
+  end
+
+  defp apply_state_data(store, entries) when is_list(entries) do
+    StateStore.apply_mutations(store, entries)
   end
 
   # Per paper Section 4.2 Step 5: PREPAREOK(v, n, i) where i is sender

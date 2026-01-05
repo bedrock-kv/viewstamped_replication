@@ -3,8 +3,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
   use ExUnit.Case, async: true
 
   alias Bedrock.ViewstampedReplication.ClientTable
-  alias Bedrock.ViewstampedReplication.Log.InMemoryLog
   alias Bedrock.ViewstampedReplication.Mode.ViewChange
+  alias Bedrock.ViewstampedReplication.StateStore.InMemoryLog
 
   import Mox
 
@@ -123,7 +123,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
       # With quorum=2, receiving one STARTVIEWCHANGE (quorum-1=1) triggers DOVIEWCHANGE
       # Per paper Section 4.2 Step 2: DOVIEWCHANGE(v, l, v', n, k, i) where i is sender
       # Sender identity is provided by transport layer, not the message tuple
-      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, [], 0, 0, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, {:incremental, []}, 0, 0, 0} -> :ok end)
 
       {:ok, updated_mode} = ViewChange.start_view_change_received(mode, 1, :a)
       assert MapSet.member?(updated_mode.start_view_change_from, :a)
@@ -147,14 +147,14 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
       # Need quorum-1 = 2-1 = 1 STARTVIEWCHANGE to send DOVIEWCHANGE
       # Primary is :b for view 1
       # Per paper Section 4.2 Step 2: DOVIEWCHANGE(v, l, v', n, k, i) where i is sender
-      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, [], 0, 0, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, {:incremental, []}, 0, 0, 0} -> :ok end)
 
       {:ok, updated_mode} = ViewChange.start_view_change_received(mode, 1, :a)
       assert updated_mode.sent_do_view_change == true
     end
 
     test "does not send DOVIEWCHANGE twice", %{mode: mode} do
-      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, [], 0, 0, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, {:incremental, []}, 0, 0, 0} -> :ok end)
 
       {:ok, mode} = ViewChange.start_view_change_received(mode, 1, :a)
 
@@ -210,29 +210,31 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
 
     test "becomes primary when quorum DOVIEWCHANGE received", %{mode: mode} do
       log_entries = [{1, {:client, 1, :op1}}]
+      state_data = {:incremental, log_entries}
 
       # First DOVIEWCHANGE
       {:ok, mode} = ViewChange.do_view_change_received(mode, 1, log_entries, 0, 1, 0, :a)
 
       # Per paper Section 4.2 Step 3: STARTVIEW sent to "other replicas" (not self)
       # :b (replica_index 1) is the new primary, so only :a and :c receive STARTVIEW
-      expect(MockInterface, :send_event, fn :a, {:start_view, 1, ^log_entries, 1, 0} -> :ok end)
-      expect(MockInterface, :send_event, fn :c, {:start_view, 1, ^log_entries, 1, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :a, {:start_view, 1, ^state_data, 1, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :c, {:start_view, 1, ^state_data, 1, 0} -> :ok end)
 
       # Second DOVIEWCHANGE - reaches quorum
       result = ViewChange.do_view_change_received(mode, 1, log_entries, 0, 1, 0, :c)
 
-      assert {:become_primary, 1, 1, 0, _new_log, _client_table} = result
+      assert {:become_primary, 1, 1, 0, _new_store, _client_table} = result
     end
 
     test "selects log with highest last_normal_view", %{mode: mode} do
       old_log = [{1, {:client, 1, :old_op}}]
       new_log = [{1, {:client, 1, :new_op}}]
+      new_state_data = {:incremental, new_log}
 
       {:ok, mode} = ViewChange.do_view_change_received(mode, 1, old_log, 0, 1, 0, :a)
 
       # STARTVIEW to other replicas only (not :b which is self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^new_log, 1, 0} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^new_state_data, 1, 0} -> :ok end)
 
       # Higher last_normal_view wins
       result = ViewChange.do_view_change_received(mode, 1, new_log, 1, 1, 0, :c)
@@ -242,11 +244,12 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
 
     test "uses max commit_number from all messages", %{mode: mode} do
       log_entries = [{1, {:client, 1, :op1}}, {2, {:client, 1, :op2}}]
+      state_data = {:incremental, log_entries}
 
       {:ok, mode} = ViewChange.do_view_change_received(mode, 1, log_entries, 0, 2, 1, :a)
 
       # STARTVIEW to other replicas only (not :b which is self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^log_entries, 2, 2} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^state_data, 2, 2} -> :ok end)
 
       # Higher commit_num
       result = ViewChange.do_view_change_received(mode, 1, log_entries, 0, 2, 2, :c)

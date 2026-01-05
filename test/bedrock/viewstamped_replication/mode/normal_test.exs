@@ -2,9 +2,9 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
-  alias Bedrock.ViewstampedReplication.Log
-  alias Bedrock.ViewstampedReplication.Log.InMemoryLog
   alias Bedrock.ViewstampedReplication.Mode.Normal
+  alias Bedrock.ViewstampedReplication.StateStore
+  alias Bedrock.ViewstampedReplication.StateStore.InMemoryLog
 
   import Mox
 
@@ -185,7 +185,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :view_change -> &mock_cancel/0 end)
 
       log = InMemoryLog.new()
-      {:ok, log} = Log.save_current_view_number(log, 5)
+      {:ok, log} = StateStore.save_view_number(log, 5)
       mode = Normal.new(5, 0, 0, log, [:a, :b, :c], 1, 2, MockInterface, false)
 
       {:ok, same_mode} = Normal.prepare_received(mode, 3, :msg, 1, 0, :a)
@@ -328,7 +328,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :view_change -> &mock_cancel/0 end)
 
       log = InMemoryLog.new()
-      {:ok, log} = Log.save_current_view_number(log, 5)
+      {:ok, log} = StateStore.save_view_number(log, 5)
       mode = Normal.new(5, 0, 0, log, [:a, :b, :c], 1, 2, MockInterface, false)
 
       {:ok, same_mode} = Normal.commit_received(mode, 3, 1)
@@ -387,7 +387,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :view_change -> &mock_cancel/0 end)
 
       log = InMemoryLog.new()
-      {:ok, log} = Log.save_current_view_number(log, 5)
+      {:ok, log} = StateStore.save_view_number(log, 5)
       mode = Normal.new(5, 0, 0, log, [:a, :b, :c], 1, 2, MockInterface, false)
 
       {:ok, same_mode} = Normal.start_view_change_received(mode, 3, :c)
@@ -412,7 +412,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :view_change -> &mock_cancel/0 end)
 
       log = InMemoryLog.new()
-      {:ok, log} = Log.save_current_view_number(log, 5)
+      {:ok, log} = StateStore.save_view_number(log, 5)
       mode = Normal.new(5, 0, 0, log, [:a, :b, :c], 1, 2, MockInterface, false)
 
       {:ok, same_mode} = Normal.start_view_received(mode, 3, [], 0, 0)
@@ -438,7 +438,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :heartbeat -> &mock_cancel/0 end)
 
       expect(MockInterface, :send_event, fn :recovering,
-                                            {:recovery_response, 0, :nonce, [], 0, 0, true} ->
+                                            {:recovery_response, 0, :nonce, {:incremental, []}, 0, 0, true} ->
         :ok
       end)
 
@@ -499,9 +499,9 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :heartbeat -> &mock_cancel/0 end)
 
       log = InMemoryLog.new()
-      {:ok, log} = Log.append(log, 1, {:c1, 1, :op1})
-      {:ok, log} = Log.append(log, 2, {:c1, 2, :op2})
-      {:ok, log} = Log.append(log, 3, {:c1, 3, :op3})
+      {:ok, log} = StateStore.record_pending(log, 1, {:c1, 1, :op1})
+      {:ok, log} = StateStore.record_pending(log, 2, {:c1, 2, :op2})
+      {:ok, log} = StateStore.record_pending(log, 3, {:c1, 3, :op3})
 
       # New primary executes committed ops 1 and 2 (per paper Section 4.2 Step 4)
       expect(MockInterface, :execute_operation, fn :op1 -> {:ok, :result1} end)
@@ -516,7 +516,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       # Expect primary to send NEWSTATE with entries from op 2 onwards
       expect(MockInterface, :send_event, fn :backup,
                                             {:new_state, 0,
-                                             [{2, {:c1, 2, :op2}}, {3, {:c1, 3, :op3}}], 3, 2} ->
+                                             {:incremental, [{2, {:c1, 2, :op2}}, {3, {:c1, 3, :op3}}]}, 3, 2} ->
         :ok
       end)
 
@@ -533,8 +533,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :view_change -> &mock_cancel/0 end)
 
       log = InMemoryLog.new()
-      {:ok, log} = Log.append(log, 1, {:c1, 1, :op1})
-      {:ok, log} = Log.append(log, 2, {:c1, 2, :op2})
+      {:ok, log} = StateStore.record_pending(log, 1, {:c1, 1, :op1})
+      {:ok, log} = StateStore.record_pending(log, 2, {:c1, 2, :op2})
 
       # Backup executes committed op 1 (per paper Section 4.2 Step 5)
       expect(MockInterface, :execute_operation, fn :op1 -> {:ok, :result1} end)
@@ -545,7 +545,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
 
       # Backup should respond with NEWSTATE
       expect(MockInterface, :send_event, fn :requester,
-                                            {:new_state, 0, [{2, {:c1, 2, :op2}}], 2, 1} ->
+                                            {:new_state, 0, {:incremental, [{2, {:c1, 2, :op2}}]}, 2, 1} ->
         :ok
       end)
 
@@ -583,7 +583,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
 
       # Backup starts with only op 1
       log = InMemoryLog.new()
-      {:ok, log} = Log.append(log, 1, {:c1, 1, :op1})
+      {:ok, log} = StateStore.record_pending(log, 1, {:c1, 1, :op1})
 
       # Backup executes committed op 1 on creation (per paper Section 4.2 Step 5)
       expect(MockInterface, :execute_operation, fn :op1 -> {:ok, :result1} end)
@@ -663,8 +663,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
 
       # Backup has entries 1-2 committed
       log = InMemoryLog.new()
-      {:ok, log} = Log.append(log, 1, {:c1, 1, :op1})
-      {:ok, log} = Log.append(log, 2, {:c1, 2, :op2})
+      {:ok, log} = StateStore.record_pending(log, 1, {:c1, 1, :op1})
+      {:ok, log} = StateStore.record_pending(log, 2, {:c1, 2, :op2})
 
       # Execute committed ops on creation
       expect(MockInterface, :execute_operation, fn :op1 -> {:ok, :result1} end)
@@ -687,9 +687,11 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       {:ok, updated_mode} = Normal.new_state_received(mode, 0, new_entries, 3, 3, :primary)
 
       # Verify original entries are preserved (not lost per paper's bug)
-      assert Log.get(updated_mode.log, 1) == {:c1, 1, :op1}
-      assert Log.get(updated_mode.log, 2) == {:c1, 2, :op2}
-      assert Log.get(updated_mode.log, 3) == {:c1, 3, :op3}
+      # Using InMemoryLog's internal entries map directly for verification
+      store = updated_mode.store
+      assert Map.get(store.entries, 1) == {:c1, 1, :op1}
+      assert Map.get(store.entries, 2) == {:c1, 2, :op2}
+      assert Map.get(store.entries, 3) == {:c1, 3, :op3}
     end
   end
 end

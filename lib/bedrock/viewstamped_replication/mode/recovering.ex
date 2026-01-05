@@ -13,14 +13,14 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
   """
 
   alias Bedrock.ViewstampedReplication, as: VR
-  alias VR.Log
+  alias VR.StateStore
 
   @behaviour VR.Mode
 
   @type recovery_response :: %{
           view_number: VR.view_number(),
           nonce: term(),
-          log_entries: list(),
+          state_data: term(),
           op_number: VR.op_number(),
           commit_number: VR.commit_number(),
           is_primary: boolean(),
@@ -30,7 +30,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
   @type t :: %__MODULE__{
           view_number: VR.view_number(),
           nonce: term(),
-          log: Log.t(),
+          store: StateStore.t(),
           configuration: [VR.replica_id()],
           replica_index: non_neg_integer(),
           quorum: VR.quorum(),
@@ -44,7 +44,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
   defstruct ~w[
     view_number
     nonce
-    log
+    store
     configuration
     replica_index
     quorum
@@ -59,20 +59,20 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
   """
   @spec new(
           term(),
-          Log.t(),
+          StateStore.t(),
           [VR.replica_id()],
           non_neg_integer(),
           VR.quorum(),
           module()
         ) :: t()
-  def new(nonce, log, configuration, replica_index, quorum, interface) do
+  def new(nonce, store, configuration, replica_index, quorum, interface) do
     cancel_fn = interface.timer(:recovery)
     me = Enum.at(configuration, replica_index)
 
     mode = %__MODULE__{
       view_number: 0,
       nonce: nonce,
-      log: log,
+      store: store,
       configuration: configuration,
       replica_index: replica_index,
       quorum: quorum,
@@ -132,7 +132,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
   def do_view_change_received(
         mode,
         _view_num,
-        _log_entries,
+        _state_data,
         _last_normal_view,
         _op_num,
         _commit_num,
@@ -141,7 +141,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
       do: {:ok, mode}
 
   @impl VR.Mode
-  def start_view_received(mode, _view_num, _log_entries, _op_num, _commit_num), do: {:ok, mode}
+  def start_view_received(mode, _view_num, _state_data, _op_num, _commit_num), do: {:ok, mode}
 
   @impl VR.Mode
   # Can't help others while recovering
@@ -153,7 +153,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
 
   @impl VR.Mode
   # Ignore during recovery
-  def new_state_received(mode, _view_num, _log_entries, _op_num, _commit_num, _from),
+  def new_state_received(mode, _view_num, _state_data, _op_num, _commit_num, _from),
     do: {:ok, mode}
 
   @impl VR.Mode
@@ -161,7 +161,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
         mode,
         view_num,
         nonce,
-        log_entries,
+        state_data,
         op_num,
         commit_num,
         is_primary,
@@ -173,7 +173,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
         mode,
         _view_num,
         nonce,
-        _log_entries,
+        _state_data,
         _op_num,
         _commit_num,
         _is_primary,
@@ -186,7 +186,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
         mode,
         view_num,
         _nonce,
-        log_entries,
+        state_data,
         op_num,
         commit_num,
         is_primary,
@@ -194,7 +194,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
       ) do
     response = %{
       view_number: view_num,
-      log_entries: log_entries,
+      state_data: state_data,
       op_number: op_num,
       commit_number: commit_num,
       is_primary: is_primary,
@@ -230,15 +230,31 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
       end)
 
     if has_quorum and primary_from_latest_view != nil do
-      new_log =
-        new_mode.log
-        |> Log.truncate_after(0)
-        |> Log.append_entries(primary_from_latest_view.log_entries)
+      # Apply state from primary - handles both incremental and full transfers
+      new_store =
+        new_mode.store
+        |> StateStore.apply_state([])
+        |> apply_state_data(primary_from_latest_view.state_data)
 
       {:become_normal, primary_from_latest_view.view_number, primary_from_latest_view.op_number,
-       primary_from_latest_view.commit_number, new_log}
+       primary_from_latest_view.commit_number, new_store}
     else
       {:ok, new_mode}
     end
   end
+
+  # Apply state data - handles both incremental and full transfers
+  defp apply_state_data(store, {:full, snapshot}) do
+    StateStore.apply_state(store, snapshot)
+  end
+
+  defp apply_state_data(store, {:incremental, entries}) do
+    StateStore.apply_mutations(store, entries)
+  end
+
+  defp apply_state_data(store, entries) when is_list(entries) do
+    StateStore.apply_mutations(store, entries)
+  end
+
+  defp apply_state_data(store, nil), do: store
 end

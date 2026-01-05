@@ -3,10 +3,10 @@ defmodule Bedrock.ViewstampedReplicationTest do
   use ExUnit.Case, async: true
 
   alias Bedrock.ViewstampedReplication, as: VR
-  alias VR.Log
-  alias VR.Log.InMemoryLog
   alias VR.Mode.Normal
   alias VR.Mode.ViewChange
+  alias VR.StateStore
+  alias VR.StateStore.InMemoryLog
 
   import Mox
   alias Bedrock.ViewstampedReplication.MockInterface
@@ -297,27 +297,25 @@ defmodule Bedrock.ViewstampedReplicationTest do
     end
   end
 
-  describe "Log protocol" do
-    test "InMemoryLog implements Log protocol" do
-      log = InMemoryLog.new()
+  describe "StateStore protocol" do
+    test "InMemoryLog implements StateStore protocol" do
+      store = InMemoryLog.new()
 
-      assert 0 = Log.newest_op_number(log)
-      assert 0 = Log.current_view_number(log)
+      assert 0 = StateStore.op_number(store)
+      assert 0 = StateStore.get_view_number(store)
 
-      # Append entries
-      {:ok, log} = Log.append(log, 1, {:client1, 1, :op1})
-      {:ok, log} = Log.append(log, 2, {:client1, 2, :op2})
+      # Record pending entries
+      {:ok, store} = StateStore.record_pending(store, 1, {:client1, 1, :op1})
+      {:ok, store} = StateStore.record_pending(store, 2, {:client1, 2, :op2})
 
-      assert 2 = Log.newest_op_number(log)
-      assert {:client1, 1, :op1} = Log.get(log, 1)
-      assert {:client1, 2, :op2} = Log.get(log, 2)
+      assert 2 = StateStore.op_number(store)
 
       # Gap detection
-      assert {:error, :gap} = Log.append(log, 4, {:client1, 4, :op4})
+      assert {:error, :gap} = StateStore.record_pending(store, 4, {:client1, 4, :op4})
 
       # View number persistence
-      {:ok, log} = Log.save_current_view_number(log, 5)
-      assert 5 = Log.current_view_number(log)
+      {:ok, store} = StateStore.save_view_number(store, 5)
+      assert 5 = StateStore.get_view_number(store)
     end
   end
 
@@ -457,7 +455,7 @@ defmodule Bedrock.ViewstampedReplicationTest do
       expect(MockInterface, :timer, fn :heartbeat -> &mock_timer_cancel/0 end)
 
       expect(MockInterface, :send_event, fn :recovering,
-                                            {:recovery_response, 0, :nonce, [], 0, 0, true} ->
+                                            {:recovery_response, 0, :nonce, {:incremental, []}, 0, 0, true} ->
         :ok
       end)
 
@@ -533,7 +531,7 @@ defmodule Bedrock.ViewstampedReplicationTest do
 
       # Second DOVIEWCHANGE - quorum reached, become primary
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^log_entries, 1, 0} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 1, 0} -> :ok end)
       expect(MockInterface, :timer, fn :heartbeat -> &mock_timer_cancel/0 end)
 
       vr = VR.handle_event(vr, {:do_view_change, 1, log_entries, 0, 1, 0}, :c)
@@ -545,13 +543,13 @@ defmodule Bedrock.ViewstampedReplicationTest do
   end
 
   describe "API functions" do
-    test "log/1 returns the current log" do
+    test "store/1 returns the current store" do
       expect(MockInterface, :timer, fn :heartbeat -> &mock_timer_cancel/0 end)
 
-      log = InMemoryLog.new()
-      vr = VR.new(:a, [:a, :b, :c], log, MockInterface)
+      store = InMemoryLog.new()
+      vr = VR.new(:a, [:a, :b, :c], store, MockInterface)
 
-      assert VR.log(vr) == log
+      assert VR.store(vr) == store
     end
 
     test "primary_info/1 returns primary and view number" do
@@ -704,7 +702,7 @@ defmodule Bedrock.ViewstampedReplicationTest do
       log_entries = [{1, {:client1, 1, :op1}}]
 
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^log_entries, 1, 1} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 1, 1} -> :ok end)
       expect(MockInterface, :timer, fn :heartbeat -> &mock_timer_cancel/0 end)
 
       vr_b = VR.handle_event(vr_b, {:do_view_change, 1, log_entries, 0, 1, 1}, :a)
@@ -942,10 +940,10 @@ defmodule Bedrock.ViewstampedReplicationTest do
       messages = Agent.get(sent_messages, & &1)
       Agent.stop(sent_messages)
 
-      # DOVIEWCHANGE should be 6-tuple: {:do_view_change, v, l, v', n, k}
-      # NOT 7-tuple: {:do_view_change, v, l, v', n, k, sender}
+      # DOVIEWCHANGE should be 6-tuple: {:do_view_change, v, state_data, v', n, k}
+      # NOT 7-tuple: {:do_view_change, v, state_data, v', n, k, sender}
       assert [{:b, msg}] = messages
-      assert {:do_view_change, 1, _log, 0, 0, 0} = msg
+      assert {:do_view_change, 1, {:incremental, []}, 0, 0, 0} = msg
     end
 
     @tag :paper_compliance
@@ -1026,7 +1024,7 @@ defmodule Bedrock.ViewstampedReplicationTest do
       log_entries = [{1, {:client1, 1, :op1}}]
 
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^log_entries, 1, 1} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 1, 1} -> :ok end)
 
       # HERE IS THE KEY: When becoming primary with commit_number=1,
       # :b must execute op 1 and send reply to client
@@ -1081,7 +1079,7 @@ defmodule Bedrock.ViewstampedReplicationTest do
       log_entries = [{1, {:client1, 1, :op1}}, {2, {:client2, 1, :op2}}]
 
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^log_entries, 2, 2} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 2, 2} -> :ok end)
 
       # Must execute op1 first, then op2 (in order)
       expect(MockInterface, :execute_operation, fn :op1 -> {:ok, :result1} end)

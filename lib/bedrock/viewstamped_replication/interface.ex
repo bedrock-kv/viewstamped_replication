@@ -66,10 +66,10 @@ defmodule Bedrock.ViewstampedReplication.Interface do
   @callback execute_operation(operation :: term()) :: {:ok, result :: term()}
 
   @doc """
-  Called when an operation has been committed to the log.
+  Called when an operation has been committed.
   """
   @callback operation_committed(
-              log :: VR.Log.t(),
+              store :: VR.StateStore.t(),
               op_number :: VR.op_number(),
               operation :: term(),
               result :: term()
