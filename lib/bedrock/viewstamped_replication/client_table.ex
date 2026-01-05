@@ -45,9 +45,9 @@ defmodule Bedrock.ViewstampedReplication.ClientTable do
   a cached result.
 
   Returns:
-  - :new - This is a new request that should be processed
-  - :duplicate - This request is already being processed (drop it)
-  - {:cached, result} - This request was already completed, return cached result
+  - `:new` - This is a new request that should be processed
+  - `:duplicate` - This request is already being processed (drop it)
+  - `{:cached, result}` - This request was already completed, return cached result
   """
   @spec check_request(t(), client_id, request_number) :: :new | :duplicate | {:cached, result}
   def check_request(%__MODULE__{table: table}, client_id, request_number) do

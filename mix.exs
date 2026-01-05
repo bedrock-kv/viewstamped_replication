@@ -65,7 +65,7 @@ defmodule Bedrockviewstamped_replication.MixProject do
 
   defp docs do
     [
-      main: "Bedrock.viewstamped_replication",
+      main: "Bedrock.ViewstampedReplication",
       extras: ["README.md", "CHANGELOG.md"]
     ]
   end
