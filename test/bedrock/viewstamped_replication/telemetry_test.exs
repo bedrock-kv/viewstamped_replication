@@ -139,7 +139,9 @@ defmodule Bedrock.ViewstampedReplication.TelemetryTest do
     test "emits prepare_ok_received telemetry" do
       Telemetry.track_prepare_ok_received(5, 100, :backup_1)
 
-      assert_receive {:telemetry_event, [:bedrock, :vr, :prepare_ok_received], measurements, metadata}
+      assert_receive {:telemetry_event, [:bedrock, :vr, :prepare_ok_received], measurements,
+                      metadata}
+
       assert is_integer(measurements.at)
       assert metadata.view_number == 5
       assert metadata.op_number == 100
@@ -162,7 +164,9 @@ defmodule Bedrock.ViewstampedReplication.TelemetryTest do
     test "emits operation_committed telemetry" do
       Telemetry.track_operation_committed(42, {:put, :key, :value})
 
-      assert_receive {:telemetry_event, [:bedrock, :vr, :operation_committed], measurements, metadata}
+      assert_receive {:telemetry_event, [:bedrock, :vr, :operation_committed], measurements,
+                      metadata}
+
       assert is_integer(measurements.at)
       assert metadata.op_number == 42
       assert metadata.operation == {:put, :key, :value}
@@ -173,7 +177,9 @@ defmodule Bedrock.ViewstampedReplication.TelemetryTest do
     test "emits start_view_change_sent telemetry" do
       Telemetry.track_start_view_change_sent(8, :replica_1)
 
-      assert_receive {:telemetry_event, [:bedrock, :vr, :start_view_change_sent], measurements, metadata}
+      assert_receive {:telemetry_event, [:bedrock, :vr, :start_view_change_sent], measurements,
+                      metadata}
+
       assert is_integer(measurements.at)
       assert metadata.view_number == 8
       assert metadata.replica == :replica_1
@@ -184,7 +190,9 @@ defmodule Bedrock.ViewstampedReplication.TelemetryTest do
     test "emits do_view_change_sent telemetry" do
       Telemetry.track_do_view_change_sent(8, :new_primary)
 
-      assert_receive {:telemetry_event, [:bedrock, :vr, :do_view_change_sent], measurements, metadata}
+      assert_receive {:telemetry_event, [:bedrock, :vr, :do_view_change_sent], measurements,
+                      metadata}
+
       assert is_integer(measurements.at)
       assert metadata.view_number == 8
       assert metadata.to == :new_primary
@@ -218,7 +226,9 @@ defmodule Bedrock.ViewstampedReplication.TelemetryTest do
     test "emits recovery_response_received telemetry" do
       Telemetry.track_recovery_response_received(10, :replica_2)
 
-      assert_receive {:telemetry_event, [:bedrock, :vr, :recovery_response_received], measurements, metadata}
+      assert_receive {:telemetry_event, [:bedrock, :vr, :recovery_response_received],
+                      measurements, metadata}
+
       assert is_integer(measurements.at)
       assert metadata.view_number == 10
       assert metadata.from == :replica_2
