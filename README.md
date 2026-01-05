@@ -10,7 +10,7 @@ An implementation of the Viewstamped Replication consensus algorithm in Elixir t
 ```elixir
 def deps do
   [
-    {:bedrock_viewstamped_replication, "~> 0.1"}
+    {:bedrock_viewstamped_replication, "~> 0.2.1"}
   ]
 end
 ```
