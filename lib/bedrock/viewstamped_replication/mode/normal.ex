@@ -664,18 +664,42 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
     # Process results, skipping already-executed operations
     new_client_table =
       Enum.reduce(results, ct, fn {op_num, result_tuple}, acc_ct ->
-        process_pending_result(new_store, acc_ct, op_num, result_tuple, view, interface, send_replies)
+        process_pending_result(
+          new_store,
+          acc_ct,
+          op_num,
+          result_tuple,
+          view,
+          interface,
+          send_replies
+        )
       end)
 
     {new_store, new_client_table}
   end
 
-  defp process_pending_result(_store, ct, _op_num, {:skip, _client_id, _req_num, _result}, _view, _iface, _send?) do
+  defp process_pending_result(
+         _store,
+         ct,
+         _op_num,
+         {:skip, _client_id, _req_num, _result},
+         _view,
+         _iface,
+         _send?
+       ) do
     # Already executed, client_table already has this entry
     ct
   end
 
-  defp process_pending_result(store, ct, op_num, {:execute, client_id, req_num, operation, result}, view, iface, send?) do
+  defp process_pending_result(
+         store,
+         ct,
+         op_num,
+         {:execute, client_id, req_num, operation, result},
+         view,
+         iface,
+         send?
+       ) do
     iface.operation_committed(store, op_num, operation, result)
     if send?, do: iface.send_reply(client_id, view, req_num, result)
     ClientTable.record_result(ct, client_id, req_num, result)

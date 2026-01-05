@@ -256,7 +256,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
       send_start_view_to_all(new_mode, full_state_data, best_op_num, max_commit_num)
 
       # Paper Section 4.2 Step 4: preserve client_table across view change
-      {:become_primary, mode.view_number, best_op_num, max_commit_num, new_store, mode.client_table}
+      {:become_primary, mode.view_number, best_op_num, max_commit_num, new_store,
+       mode.client_table}
     else
       {:ok, new_mode}
     end

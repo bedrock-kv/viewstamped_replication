@@ -438,7 +438,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       expect(MockInterface, :timer, fn :heartbeat -> &mock_cancel/0 end)
 
       expect(MockInterface, :send_event, fn :recovering,
-                                            {:recovery_response, 0, :nonce, {:incremental, []}, 0, 0, true} ->
+                                            {:recovery_response, 0, :nonce, {:incremental, []}, 0,
+                                             0, true} ->
         :ok
       end)
 
@@ -516,7 +517,9 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
       # Expect primary to send NEWSTATE with entries from op 2 onwards
       expect(MockInterface, :send_event, fn :backup,
                                             {:new_state, 0,
-                                             {:incremental, [{2, {:c1, 2, :op2}}, {3, {:c1, 3, :op3}}]}, 3, 2} ->
+                                             {:incremental,
+                                              [{2, {:c1, 2, :op2}}, {3, {:c1, 3, :op3}}]}, 3,
+                                             2} ->
         :ok
       end)
 
@@ -545,7 +548,8 @@ defmodule Bedrock.ViewstampedReplication.Mode.NormalTest do
 
       # Backup should respond with NEWSTATE
       expect(MockInterface, :send_event, fn :requester,
-                                            {:new_state, 0, {:incremental, [{2, {:c1, 2, :op2}}]}, 2, 1} ->
+                                            {:new_state, 0, {:incremental, [{2, {:c1, 2, :op2}}]},
+                                             2, 1} ->
         :ok
       end)
 

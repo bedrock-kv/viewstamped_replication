@@ -455,7 +455,8 @@ defmodule Bedrock.ViewstampedReplicationTest do
       expect(MockInterface, :timer, fn :heartbeat -> &mock_timer_cancel/0 end)
 
       expect(MockInterface, :send_event, fn :recovering,
-                                            {:recovery_response, 0, :nonce, {:incremental, []}, 0, 0, true} ->
+                                            {:recovery_response, 0, :nonce, {:incremental, []}, 0,
+                                             0, true} ->
         :ok
       end)
 
@@ -531,7 +532,12 @@ defmodule Bedrock.ViewstampedReplicationTest do
 
       # Second DOVIEWCHANGE - quorum reached, become primary
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 1, 0} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _,
+                                               {:start_view, 1, {:incremental, ^log_entries}, 1,
+                                                0} ->
+        :ok
+      end)
+
       expect(MockInterface, :timer, fn :heartbeat -> &mock_timer_cancel/0 end)
 
       vr = VR.handle_event(vr, {:do_view_change, 1, log_entries, 0, 1, 0}, :c)
@@ -702,7 +708,12 @@ defmodule Bedrock.ViewstampedReplicationTest do
       log_entries = [{1, {:client1, 1, :op1}}]
 
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 1, 1} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _,
+                                               {:start_view, 1, {:incremental, ^log_entries}, 1,
+                                                1} ->
+        :ok
+      end)
+
       expect(MockInterface, :timer, fn :heartbeat -> &mock_timer_cancel/0 end)
 
       vr_b = VR.handle_event(vr_b, {:do_view_change, 1, log_entries, 0, 1, 1}, :a)
@@ -1024,7 +1035,11 @@ defmodule Bedrock.ViewstampedReplicationTest do
       log_entries = [{1, {:client1, 1, :op1}}]
 
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 1, 1} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _,
+                                               {:start_view, 1, {:incremental, ^log_entries}, 1,
+                                                1} ->
+        :ok
+      end)
 
       # HERE IS THE KEY: When becoming primary with commit_number=1,
       # :b must execute op 1 and send reply to client
@@ -1079,7 +1094,11 @@ defmodule Bedrock.ViewstampedReplicationTest do
       log_entries = [{1, {:client1, 1, :op1}}, {2, {:client2, 1, :op2}}]
 
       # Per paper Section 4.2 Step 3: STARTVIEW to "other replicas" only (not self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, {:incremental, ^log_entries}, 2, 2} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _,
+                                               {:start_view, 1, {:incremental, ^log_entries}, 2,
+                                                2} ->
+        :ok
+      end)
 
       # Must execute op1 first, then op2 (in order)
       expect(MockInterface, :execute_operation, fn :op1 -> {:ok, :result1} end)

@@ -393,15 +393,21 @@ defmodule Bedrock.ViewstampedReplication do
     do: become_normal(t, view_num, op_num, commit_num, new_store, nil)
 
   # With client_table preservation (Paper Section 4.2 Step 5)
-  defp handle_mode_result({:become_normal, view_num, op_num, commit_num, new_store, client_table}, t),
-    do: become_normal(t, view_num, op_num, commit_num, new_store, client_table)
+  defp handle_mode_result(
+         {:become_normal, view_num, op_num, commit_num, new_store, client_table},
+         t
+       ),
+       do: become_normal(t, view_num, op_num, commit_num, new_store, client_table)
 
   defp handle_mode_result({:become_primary, view_num, op_num, commit_num, new_store}, t),
     do: become_normal(t, view_num, op_num, commit_num, new_store, nil)
 
   # With client_table preservation (Paper Section 4.2 Step 4)
-  defp handle_mode_result({:become_primary, view_num, op_num, commit_num, new_store, client_table}, t),
-    do: become_normal(t, view_num, op_num, commit_num, new_store, client_table)
+  defp handle_mode_result(
+         {:become_primary, view_num, op_num, commit_num, new_store, client_table},
+         t
+       ),
+       do: become_normal(t, view_num, op_num, commit_num, new_store, client_table)
 
   # State transitions
   defp become_normal(t, view_num, op_num, commit_num, new_store, client_table) do

@@ -123,7 +123,10 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
       # With quorum=2, receiving one STARTVIEWCHANGE (quorum-1=1) triggers DOVIEWCHANGE
       # Per paper Section 4.2 Step 2: DOVIEWCHANGE(v, l, v', n, k, i) where i is sender
       # Sender identity is provided by transport layer, not the message tuple
-      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, {:incremental, []}, 0, 0, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :b,
+                                            {:do_view_change, 1, {:incremental, []}, 0, 0, 0} ->
+        :ok
+      end)
 
       {:ok, updated_mode} = ViewChange.start_view_change_received(mode, 1, :a)
       assert MapSet.member?(updated_mode.start_view_change_from, :a)
@@ -147,14 +150,20 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
       # Need quorum-1 = 2-1 = 1 STARTVIEWCHANGE to send DOVIEWCHANGE
       # Primary is :b for view 1
       # Per paper Section 4.2 Step 2: DOVIEWCHANGE(v, l, v', n, k, i) where i is sender
-      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, {:incremental, []}, 0, 0, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :b,
+                                            {:do_view_change, 1, {:incremental, []}, 0, 0, 0} ->
+        :ok
+      end)
 
       {:ok, updated_mode} = ViewChange.start_view_change_received(mode, 1, :a)
       assert updated_mode.sent_do_view_change == true
     end
 
     test "does not send DOVIEWCHANGE twice", %{mode: mode} do
-      expect(MockInterface, :send_event, fn :b, {:do_view_change, 1, {:incremental, []}, 0, 0, 0} -> :ok end)
+      expect(MockInterface, :send_event, fn :b,
+                                            {:do_view_change, 1, {:incremental, []}, 0, 0, 0} ->
+        :ok
+      end)
 
       {:ok, mode} = ViewChange.start_view_change_received(mode, 1, :a)
 
@@ -234,7 +243,9 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChangeTest do
       {:ok, mode} = ViewChange.do_view_change_received(mode, 1, old_log, 0, 1, 0, :a)
 
       # STARTVIEW to other replicas only (not :b which is self)
-      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^new_state_data, 1, 0} -> :ok end)
+      expect(MockInterface, :send_event, 2, fn _, {:start_view, 1, ^new_state_data, 1, 0} ->
+        :ok
+      end)
 
       # Higher last_normal_view wins
       result = ViewChange.do_view_change_received(mode, 1, new_log, 1, 1, 0, :c)

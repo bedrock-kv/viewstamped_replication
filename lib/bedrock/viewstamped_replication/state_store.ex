@@ -36,7 +36,8 @@ defprotocol Bedrock.ViewstampedReplication.StateStore do
   - `{:incremental, entries}` - log-based stores return entries from op onwards
   - `{:full, state}` - snapshot-based stores return full state (can't do incremental)
   """
-  @spec get_state_from(t, op_number) :: {:incremental, [{op_number, mutation()}]} | {:full, term()}
+  @spec get_state_from(t, op_number) ::
+          {:incremental, [{op_number, mutation()}]} | {:full, term()}
   def get_state_from(store, from_op)
 
   @doc """

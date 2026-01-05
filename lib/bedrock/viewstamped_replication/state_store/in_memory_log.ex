@@ -108,7 +108,8 @@ defmodule Bedrock.ViewstampedReplication.StateStore.InMemoryLog do
 
     def record_pending(_store, _op_number, _mutation), do: {:error, :gap}
 
-    def commit_through(store, target_commit, _execute_fn) when target_commit <= store.commit_number do
+    def commit_through(store, target_commit, _execute_fn)
+        when target_commit <= store.commit_number do
       {:ok, store, []}
     end
 
