@@ -48,21 +48,8 @@ defprotocol Bedrock.ViewstampedReplication.Log do
   def truncate_after(log, op_number)
 
   @doc """
-  Get all entries as a list for view change log transfer.
-  """
-  @spec to_list(t) :: [{op_number, entry}]
-  def to_list(log)
-
-  @doc """
-  Create a log from a list of entries (for STARTVIEW processing).
-  """
-  @spec from_list(t, [{op_number, entry}]) :: t
-  def from_list(log, entries)
-
-  @doc """
-  Append multiple entries to the log efficiently.
+  Append multiple entries to the log.
   Preserves existing entries and merges new ones.
-  More efficient than `from_list(log, to_list(log) ++ entries)`.
   """
   @spec append_entries(t, [{op_number, entry}]) :: t
   def append_entries(log, entries)

@@ -44,15 +44,24 @@ defmodule Bedrock.ViewstampedReplication.Log.InMemoryLog do
     def get(log, op_number), do: Map.get(log.entries, op_number)
 
     def entries_from(log, op_number) do
-      log.entries
-      |> Enum.filter(fn {n, _entry} -> n >= op_number end)
-      |> Enum.sort_by(fn {n, _entry} -> n end)
+      if op_number > log.newest_op_number do
+        []
+      else
+        for n <- op_number..log.newest_op_number,
+            entry = Map.get(log.entries, n),
+            entry != nil,
+            do: {n, entry}
+      end
     end
 
     def entries_to(log, op_number) do
-      log.entries
-      |> Enum.filter(fn {n, _entry} -> n <= op_number end)
-      |> Enum.sort_by(fn {n, _entry} -> n end)
+      if log.newest_op_number == 0 do
+        []
+      else
+        end_op = min(op_number, log.newest_op_number)
+
+        for n <- 1..end_op, entry = Map.get(log.entries, n), entry != nil, do: {n, entry}
+      end
     end
 
     def newest_op_number(log), do: log.newest_op_number
@@ -68,25 +77,6 @@ defmodule Bedrock.ViewstampedReplication.Log.InMemoryLog do
       %{log | entries: new_entries, newest_op_number: new_newest}
     end
 
-    def to_list(log) do
-      log.entries
-      |> Enum.sort_by(fn {n, _entry} -> n end)
-    end
-
-    def from_list(log, entries) do
-      new_entries = Map.new(entries)
-
-      new_newest =
-        if map_size(new_entries) == 0 do
-          0
-        else
-          Enum.reduce(entries, 0, fn {n, _}, acc -> max(n, acc) end)
-        end
-
-      %{log | entries: new_entries, newest_op_number: new_newest}
-    end
-
-    # O(m) where m = length(entries), instead of O(n + m) for to_list ++ from_list
     def append_entries(log, []), do: log
 
     def append_entries(log, entries) do

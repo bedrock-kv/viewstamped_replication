@@ -169,49 +169,6 @@ defmodule Bedrock.ViewstampedReplication.Log.InMemoryLogTest do
     end
   end
 
-  describe "Log.to_list/1" do
-    test "returns empty list for empty log" do
-      log = InMemoryLog.new()
-      assert [] = Log.to_list(log)
-    end
-
-    test "returns sorted list of entries" do
-      log = InMemoryLog.new()
-      {:ok, log} = Log.append(log, 1, :e1)
-      {:ok, log} = Log.append(log, 2, :e2)
-      {:ok, log} = Log.append(log, 3, :e3)
-
-      assert [{1, :e1}, {2, :e2}, {3, :e3}] = Log.to_list(log)
-    end
-  end
-
-  describe "Log.from_list/2" do
-    test "creates log from entries list" do
-      log = InMemoryLog.new()
-      entries = [{1, :e1}, {2, :e2}]
-
-      log = Log.from_list(log, entries)
-
-      assert Log.get(log, 1) == :e1
-      assert Log.get(log, 2) == :e2
-      assert Log.newest_op_number(log) == 2
-    end
-
-    test "creates empty log from empty list" do
-      log = InMemoryLog.new()
-      log = Log.from_list(log, [])
-
-      assert Log.newest_op_number(log) == 0
-    end
-
-    test "preserves current_view_number" do
-      log = InMemoryLog.new(5)
-      log = Log.from_list(log, [{1, :e1}])
-
-      assert Log.current_view_number(log) == 5
-    end
-  end
-
   describe "Log.current_view_number/1" do
     test "returns 0 for new log" do
       log = InMemoryLog.new()
@@ -237,21 +194,6 @@ defmodule Bedrock.ViewstampedReplication.Log.InMemoryLogTest do
       {:ok, log} = Log.save_current_view_number(log, 10)
 
       assert 10 = Log.current_view_number(log)
-    end
-  end
-
-  describe "round-trip to_list -> from_list" do
-    test "preserves all entries" do
-      original = InMemoryLog.new()
-      {:ok, original} = Log.append(original, 1, {:c1, 1, :op1})
-      {:ok, original} = Log.append(original, 2, {:c2, 2, :op2})
-      {:ok, original} = Log.append(original, 3, {:c3, 3, :op3})
-
-      entries = Log.to_list(original)
-      restored = Log.from_list(InMemoryLog.new(), entries)
-
-      assert Log.to_list(restored) == Log.to_list(original)
-      assert Log.newest_op_number(restored) == Log.newest_op_number(original)
     end
   end
 end

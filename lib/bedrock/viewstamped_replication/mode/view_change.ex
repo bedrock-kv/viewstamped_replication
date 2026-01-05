@@ -242,14 +242,15 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
 
     # Check if we have quorum (f+1) DOVIEWCHANGE messages
     if map_size(new_messages) >= mode.quorum do
-      # Select best log and become primary
-      {best_log_entries, best_op_num, max_commit_num} = select_best_log(Map.values(new_messages))
+      {best_uncommitted_entries, best_op_num, max_commit_num} =
+        select_best_log(Map.values(new_messages))
 
-      # Replace our log with the best log
-      new_log = Log.from_list(mode.log, best_log_entries)
+      # Keep committed prefix, adopt best uncommitted suffix
+      truncated_log = Log.truncate_after(mode.log, mode.commit_number)
+      new_log = Log.append_entries(truncated_log, best_uncommitted_entries)
 
-      # Send STARTVIEW to all replicas
-      send_start_view_to_all(new_mode, best_log_entries, best_op_num, max_commit_num)
+      full_log_entries = Log.entries_from(new_log, 1)
+      send_start_view_to_all(new_mode, full_log_entries, best_op_num, max_commit_num)
 
       # Paper Section 4.2 Step 4: preserve client_table across view change
       {:become_primary, mode.view_number, best_op_num, max_commit_num, new_log, mode.client_table}
@@ -266,8 +267,10 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
       do: {:ok, mode}
 
   def start_view_received(mode, view_num, log_entries, op_num, commit_num) do
-    # Replace log and become normal backup
-    new_log = Log.from_list(mode.log, log_entries)
+    new_log =
+      mode.log
+      |> Log.truncate_after(0)
+      |> Log.append_entries(log_entries)
 
     # Per paper Section 4.2 Step 5:
     # "If there are non-committed operations in the log, they send a
@@ -323,11 +326,13 @@ defmodule Bedrock.ViewstampedReplication.Mode.ViewChange do
 
   # Per paper Section 4.2 Step 2: DOVIEWCHANGE(v, l, v', n, k, i) where i is sender
   # The sender identity is provided by the transport layer, not the message tuple
+  # Optimization: Send only uncommitted entries (commit_number + 1 onwards)
+  # Committed entries are identical across replicas per VR invariant
   defp send_do_view_change(mode) do
     new_primary_index = rem(mode.view_number, mode.num_replicas)
     new_primary = Enum.at(mode.configuration, new_primary_index)
 
-    log_entries = Log.to_list(mode.log)
+    log_entries = Log.entries_from(mode.log, mode.commit_number + 1)
 
     mode.interface.send_event(new_primary, {
       :do_view_change,

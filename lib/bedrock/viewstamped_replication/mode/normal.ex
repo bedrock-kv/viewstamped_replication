@@ -418,8 +418,11 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
       do: {:ok, mode}
 
   def start_view_received(mode, view_num, log_entries, op_num, commit_num) do
-    # Replace log with new view's log
-    new_log = Log.from_list(mode.log, log_entries)
+    new_log =
+      mode.log
+      |> Log.truncate_after(0)
+      |> Log.append_entries(log_entries)
+
     {:become_normal, view_num, op_num, commit_num, new_log}
   end
 
@@ -433,7 +436,7 @@ defmodule Bedrock.ViewstampedReplication.Mode.Normal do
 
     {log_entries, op_num, commit_num} =
       if is_primary do
-        {Log.to_list(mode.log), mode.op_number, mode.commit_number}
+        {Log.entries_from(mode.log, 1), mode.op_number, mode.commit_number}
       else
         {nil, nil, nil}
       end

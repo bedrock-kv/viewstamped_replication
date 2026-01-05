@@ -230,8 +230,10 @@ defmodule Bedrock.ViewstampedReplication.Mode.Recovering do
       end)
 
     if has_quorum and primary_from_latest_view != nil do
-      # Use the primary from latest view to recover
-      new_log = Log.from_list(new_mode.log, primary_from_latest_view.log_entries)
+      new_log =
+        new_mode.log
+        |> Log.truncate_after(0)
+        |> Log.append_entries(primary_from_latest_view.log_entries)
 
       {:become_normal, primary_from_latest_view.view_number, primary_from_latest_view.op_number,
        primary_from_latest_view.commit_number, new_log}
